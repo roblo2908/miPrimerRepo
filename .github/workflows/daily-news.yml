@@ -1,0 +1,35 @@
+name: Daily News Digest
+
+on:
+  schedule:
+    # Runs every day at 08:00 UTC (adjust to your timezone)
+    - cron: "0 8 * * *"
+  workflow_dispatch: # Allow manual runs from the Actions tab
+
+jobs:
+  send-news:
+    name: Fetch & Email News
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run news agent
+        env:
+          EMAIL_SENDER:    ${{ secrets.EMAIL_SENDER }}
+          EMAIL_PASSWORD:  ${{ secrets.EMAIL_PASSWORD }}
+          EMAIL_RECIPIENT: ${{ secrets.EMAIL_RECIPIENT }}
+          # Optional – change to "en" for English sources
+          NEWS_LANGUAGE:   ${{ vars.NEWS_LANGUAGE || 'es' }}
+          # Optional – articles per source (default 5)
+          MAX_ARTICLES:    ${{ vars.MAX_ARTICLES || '5' }}
+        run: python scripts/news_agent.py
