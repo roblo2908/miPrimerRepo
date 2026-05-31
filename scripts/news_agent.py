@@ -2,11 +2,14 @@
 news_agent.py – Fetches top news from RSS feeds, prioritizes selected topics, and sends an HTML email.
 
 Required environment variables:
-  EMAIL_SENDER      – Gmail address used to send (e.g. myaccount@gmail.com)
-  EMAIL_PASSWORD    – Gmail App Password (not your normal password)
-  EMAIL_RECIPIENT   – Address that will receive the digest
-  NEWS_LANGUAGE     – (optional) Language tag for feed selection, default "es"
-  MAX_ARTICLES      – (optional) Max articles per source, default 5
+  EMAIL_SENDER         – Gmail address used to send (e.g. myaccount@gmail.com)
+  EMAIL_PASSWORD       – Gmail App Password (not your normal password)
+  EMAIL_RECIPIENT      – Address that will receive the digest
+  NEWS_LANGUAGE        – (optional) Language tag for feed selection, default "es"
+  MAX_ARTICLES         – (optional) Max articles to inspect per source, default 20
+  MAX_TECHNOLOGY       – (optional) Max technology articles per region, default 10
+  MAX_SCIENCE          – (optional) Max science articles per region, default 6
+  MAX_POLITICS         – (optional) Max politics articles per region, default 4
 """
 
 import os
@@ -27,6 +30,12 @@ TOPIC_PRIORITY = {
     "tecnologia": 0,
     "ciencia": 1,
     "politica": 2,
+}
+
+TOPIC_LABELS = {
+    "tecnologia": "Tecnología",
+    "ciencia": "Ciencia",
+    "politica": "Política",
 }
 
 TOPIC_KEYWORDS = {
@@ -71,7 +80,12 @@ NEWS_SOURCES = {
 }
 
 LANGUAGE = os.environ.get("NEWS_LANGUAGE", "es")
-MAX_ARTICLES = int(os.environ.get("MAX_ARTICLES", "5"))
+MAX_ARTICLES = int(os.environ.get("MAX_ARTICLES", "20"))
+MAX_PER_TOPIC = {
+    "tecnologia": int(os.environ.get("MAX_TECHNOLOGY", "10")),
+    "ciencia": int(os.environ.get("MAX_SCIENCE", "6")),
+    "politica": int(os.environ.get("MAX_POLITICS", "4")),
+}
 EMAIL_SENDER = os.environ["EMAIL_SENDER"]
 EMAIL_PASSWORD = os.environ["EMAIL_PASSWORD"]
 EMAIL_RECIPIENT = os.environ["EMAIL_RECIPIENT"]
@@ -112,10 +126,21 @@ def _normalize(text: str) -> str:
 def _topic_rank(title: str, summary: str) -> tuple[int, str] | None:
     content = _normalize(f"{title} {summary}")
     for topic, rank in TOPIC_PRIORITY.items():
-        keywords = TOPIC_KEYWORDS[topic]
+        keywords = [_normalize(keyword) for keyword in TOPIC_KEYWORDS[topic]]
         if any(keyword in content for keyword in keywords):
             return rank, topic
     return None
+
+
+def _apply_topic_limits(articles: list[dict]) -> list[dict]:
+    topic_buckets = {topic: [] for topic in TOPIC_PRIORITY}
+    for article in articles:
+        topic_buckets[article["topic"]].append(article)
+
+    limited_articles = []
+    for topic in TOPIC_PRIORITY:
+        limited_articles.extend(topic_buckets[topic][: MAX_PER_TOPIC[topic]])
+    return limited_articles
 
 
 def fetch_articles(sources: list[dict], max_per_source: int, region: str) -> list[dict]:
@@ -124,8 +149,7 @@ def fetch_articles(sources: list[dict], max_per_source: int, region: str) -> lis
     for source in sources:
         try:
             feed = feedparser.parse(source["url"])
-            entries = feed.entries[: max_per_source * 3]
-            source_articles = []
+            entries = feed.entries[:max_per_source]
             for entry in entries:
                 summary = (
                     entry.get("summary")
@@ -138,7 +162,7 @@ def fetch_articles(sources: list[dict], max_per_source: int, region: str) -> lis
                 if not topic_data:
                     continue
                 topic_order, topic_name = topic_data
-                source_articles.append(
+                articles.append(
                     {
                         "region": region,
                         "source": source["name"],
@@ -150,12 +174,11 @@ def fetch_articles(sources: list[dict], max_per_source: int, region: str) -> lis
                         "topic_order": topic_order,
                     }
                 )
-
-            source_articles.sort(key=lambda article: article["topic_order"])
-            articles.extend(source_articles[:max_per_source])
         except Exception as exc:  # noqa: BLE001
             print(f"[WARN] Could not fetch {source['name']}: {exc}")
-    return articles
+
+    articles.sort(key=lambda article: (article["topic_order"], article["source"]))
+    return _apply_topic_limits(articles)
 
 
 # ---------------------------------------------------------------------------
@@ -230,7 +253,7 @@ def _render_html(articles: list[dict]) -> str:
             blocks.append(f'<div class="src">{current_source}</div>')
         blocks.append(
             f'<div class="card">'
-            f'  <div class="topic">{art["topic"]}</div>'
+            f'  <div class="topic">{TOPIC_LABELS[art["topic"]]}</div>'
             f'  <h2><a href="{art["link"]}" target="_blank">{art["title"]}</a></h2>'
             f'  <p>{art["summary"]}</p>'
             f'  <div class="meta">{art["published"]}</div>'
@@ -263,7 +286,7 @@ def _render_plain(articles: list[dict]) -> str:
         if art["source"] != current_source:
             current_source = art["source"]
             lines.append(f"\n[{current_source}]")
-        lines.append(f"\n• ({art['topic']}) {art['title']}")
+        lines.append(f"\n• ({TOPIC_LABELS[art['topic']]}) {art['title']}")
         if art["summary"]:
             lines.append(f"  {art['summary']}")
         lines.append(f"  {art['link']}")
@@ -306,7 +329,12 @@ def main() -> None:
     world_articles = fetch_articles(language_sources.get("mundo", []), MAX_ARTICLES, "mundo")
 
     articles = costa_rica_articles + world_articles
-    print(f"📰 {len(articles)} artículos obtenidos tras filtrar por Tecnología, Ciencia y Política.")
+    print(
+        "📰 "
+        f"{len(articles)} artículos obtenidos tras filtrar por Tecnología, Ciencia y Política "
+        f"(límites por región: Tecnología={MAX_PER_TOPIC['tecnologia']}, "
+        f"Ciencia={MAX_PER_TOPIC['ciencia']}, Política={MAX_PER_TOPIC['politica']})."
+    )
 
     html_body = _render_html(articles)
     plain_body = _render_plain(articles)
