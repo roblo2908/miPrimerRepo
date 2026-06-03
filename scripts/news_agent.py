@@ -45,7 +45,8 @@ TOPIC_KEYWORDS = {
         "inteligencia artificial", "software", "hardware", "app", "apps", "internet",
         "ciberseguridad", "robot", "robots", "gadgets", "digital", "datos", "chip",
         "chips", "semiconductor", "semiconductores", "nube", "cloud", "openai",
-        "google", "microsoft", "apple", "meta", "xiaomi", "samsung",
+        "google", "microsoft", "apple", "meta", "xiaomi", "samsung", "tesla",
+        "android", "iphone", "tiktok", "red social", "redes sociales", "plataforma",
     ],
     "ciencia": [
         "ciencia", "científico", "cientifica", "científicos", "cientificos", "investigación",
@@ -159,9 +160,15 @@ def _topic_score(title: str, summary: str, categories: list[str]) -> tuple[int, 
     scores = defaultdict(int)
     for topic in TOPIC_PRIORITY:
         for keyword in TOPIC_KEYWORDS[topic]:
-            scores[topic] += _count_keyword_matches(title_text, keyword) * 5
-            scores[topic] += _count_keyword_matches(summary_text, keyword) * 2
-            scores[topic] += _count_keyword_matches(categories_text, keyword) * 6
+            title_weight = 7 if topic == "tecnologia" else 5
+            summary_weight = 3 if topic == "tecnologia" else 2
+            category_weight = 8 if topic == "tecnologia" else 6
+            scores[topic] += _count_keyword_matches(title_text, keyword) * title_weight
+            scores[topic] += _count_keyword_matches(summary_text, keyword) * summary_weight
+            scores[topic] += _count_keyword_matches(categories_text, keyword) * category_weight
+
+    if scores["tecnologia"] > 0 and scores["tecnologia"] >= scores["ciencia"]:
+        return scores["tecnologia"], "tecnologia"
 
     best_topic = None
     best_score = 0
@@ -186,8 +193,21 @@ def _apply_topic_limits(articles: list[dict]) -> list[dict]:
         topic_buckets[article["topic"]].append(article)
 
     limited_articles = []
-    for topic in prioritized_topics:
-        limited_articles.extend(topic_buckets[topic][: MAX_PER_TOPIC[topic]])
+
+    technology_articles = topic_buckets["tecnologia"][: MAX_PER_TOPIC["tecnologia"]]
+    limited_articles.extend(technology_articles)
+
+    science_articles = topic_buckets["ciencia"][: MAX_PER_TOPIC["ciencia"]]
+    limited_articles.extend(science_articles)
+
+    if len(technology_articles) < MAX_PER_TOPIC["tecnologia"]:
+        science_fill_slots = MAX_PER_TOPIC["tecnologia"] - len(technology_articles)
+        extra_science = topic_buckets["ciencia"][MAX_PER_TOPIC["ciencia"] : MAX_PER_TOPIC["ciencia"] + science_fill_slots]
+        limited_articles.extend(extra_science)
+
+    if len(technology_articles) >= max(1, MAX_PER_TOPIC["tecnologia"] // 2):
+        limited_articles.extend(topic_buckets["politica"][: MAX_PER_TOPIC["politica"]])
+
     return limited_articles
 
 
@@ -385,8 +405,8 @@ def main() -> None:
     articles = costa_rica_articles + world_articles
     print(
         "📰 "
-        f"{len(articles)} artículos obtenidos con prioridad fuerte para Tecnología y Ciencia "
-        f"(límites por región: Tecnología={MAX_PER_TOPIC['tecnologia']}, "
+        f"{len(articles)} artículos obtenidos garantizando prioridad máxima para Tecnología "
+        f"y luego Ciencia (límites por región: Tecnología={MAX_PER_TOPIC['tecnologia']}, "
         f"Ciencia={MAX_PER_TOPIC['ciencia']}, Política={MAX_PER_TOPIC['politica']})."
     )
 
