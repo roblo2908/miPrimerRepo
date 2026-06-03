@@ -180,18 +180,19 @@ def _topic_score(title: str, summary: str, categories: list[str]) -> tuple[int, 
 
 
 def _apply_topic_limits(articles: list[dict]) -> list[dict]:
-    topic_buckets = {topic: [] for topic in TOPIC_PRIORITY}
+    prioritized_topics = ["tecnologia", "ciencia", "politica"]
+    topic_buckets = {topic: [] for topic in prioritized_topics}
     for article in articles:
         topic_buckets[article["topic"]].append(article)
 
     limited_articles = []
-    for topic in TOPIC_PRIORITY:
+    for topic in prioritized_topics:
         limited_articles.extend(topic_buckets[topic][: MAX_PER_TOPIC[topic]])
     return limited_articles
 
 
 def fetch_articles(sources: list[dict], max_per_source: int, region: str) -> list[dict]:
-    """Fetch, filter and prioritize articles from a list of RSS feed sources."""
+    """Fetch, classify, and prioritize articles from a list of RSS feed sources."""
     articles = []
     for source in sources:
         try:
@@ -384,7 +385,7 @@ def main() -> None:
     articles = costa_rica_articles + world_articles
     print(
         "📰 "
-        f"{len(articles)} artículos obtenidos tras clasificar por Tecnología, Ciencia y Política "
+        f"{len(articles)} artículos obtenidos con prioridad fuerte para Tecnología y Ciencia "
         f"(límites por región: Tecnología={MAX_PER_TOPIC['tecnologia']}, "
         f"Ciencia={MAX_PER_TOPIC['ciencia']}, Política={MAX_PER_TOPIC['politica']})."
     )
