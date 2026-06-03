@@ -16,6 +16,7 @@ import os
 import re
 import smtplib
 import textwrap
+from collections import defaultdict
 from datetime import date
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -42,17 +43,22 @@ TOPIC_KEYWORDS = {
     "tecnologia": [
         "tecnología", "tecnologia", "tech", "startup", "startups", "ia", "ai",
         "inteligencia artificial", "software", "hardware", "app", "apps", "internet",
-        "ciberseguridad", "robot", "robots", "gadgets", "digital", "datos",
+        "ciberseguridad", "robot", "robots", "gadgets", "digital", "datos", "chip",
+        "chips", "semiconductor", "semiconductores", "nube", "cloud", "openai",
+        "google", "microsoft", "apple", "meta", "xiaomi", "samsung",
     ],
     "ciencia": [
         "ciencia", "científico", "cientifica", "científicos", "cientificos", "investigación",
         "investigacion", "estudio", "laboratorio", "espacio", "nasa", "salud", "medicina",
         "biología", "biologia", "física", "fisica", "química", "quimica", "genética", "genetica",
+        "astronomía", "astronomia", "vacuna", "vacunas", "planeta", "universo", "descubrimiento",
     ],
     "politica": [
         "política", "politica", "gobierno", "presidente", "presidencia", "asamblea",
         "diputado", "diputada", "diputados", "diputadas", "congreso", "elecciones",
         "canciller", "ministro", "ministra", "decreto", "ley", "reforma", "partido",
+        "alcalde", "alcaldesa", "municipalidad", "poder ejecutivo", "poder legislativo",
+        "tribunal supremo de elecciones", "tse",
     ],
 }
 
@@ -123,13 +129,54 @@ def _normalize(text: str) -> str:
     return text
 
 
-def _topic_rank(title: str, summary: str) -> tuple[int, str] | None:
-    content = _normalize(f"{title} {summary}")
-    for topic, rank in TOPIC_PRIORITY.items():
-        keywords = [_normalize(keyword) for keyword in TOPIC_KEYWORDS[topic]]
-        if any(keyword in content for keyword in keywords):
-            return rank, topic
-    return None
+def _extract_categories(entry: dict) -> list[str]:
+    categories = []
+    for tag in entry.get("tags", []):
+        term = tag.get("term") or tag.get("label") or ""
+        if term:
+            categories.append(term)
+    if entry.get("category"):
+        categories.append(entry.get("category", ""))
+    return categories
+
+
+def _count_keyword_matches(text: str, keyword: str) -> int:
+    normalized_text = f" {_normalize(text)} "
+    normalized_keyword = _normalize(keyword).strip()
+    if not normalized_keyword:
+        return 0
+    if " " in normalized_keyword:
+        return normalized_text.count(normalized_keyword)
+    pattern = rf"\b{re.escape(normalized_keyword)}\b"
+    return len(re.findall(pattern, normalized_text))
+
+
+def _topic_score(title: str, summary: str, categories: list[str]) -> tuple[int, str] | None:
+    title_text = _normalize(title)
+    summary_text = _normalize(summary)
+    categories_text = _normalize(" ".join(categories))
+
+    scores = defaultdict(int)
+    for topic in TOPIC_PRIORITY:
+        for keyword in TOPIC_KEYWORDS[topic]:
+            scores[topic] += _count_keyword_matches(title_text, keyword) * 5
+            scores[topic] += _count_keyword_matches(summary_text, keyword) * 2
+            scores[topic] += _count_keyword_matches(categories_text, keyword) * 6
+
+    best_topic = None
+    best_score = 0
+    for topic in TOPIC_PRIORITY:
+        score = scores[topic]
+        if score > best_score:
+            best_topic = topic
+            best_score = score
+        elif score == best_score and score > 0 and best_topic is not None:
+            if TOPIC_PRIORITY[topic] < TOPIC_PRIORITY[best_topic]:
+                best_topic = topic
+
+    if not best_topic or best_score == 0:
+        return None
+    return best_score, best_topic
 
 
 def _apply_topic_limits(articles: list[dict]) -> list[dict]:
@@ -151,17 +198,18 @@ def fetch_articles(sources: list[dict], max_per_source: int, region: str) -> lis
             feed = feedparser.parse(source["url"])
             entries = feed.entries[:max_per_source]
             for entry in entries:
-                summary = (
+                raw_summary = (
                     entry.get("summary")
                     or entry.get("description")
                     or entry.get("title", "")
                 )
                 title = entry.get("title", "(sin título)")
-                cleaned_summary = _truncate(summary)
-                topic_data = _topic_rank(title, cleaned_summary)
+                cleaned_summary = _truncate(raw_summary)
+                categories = _extract_categories(entry)
+                topic_data = _topic_score(title, cleaned_summary, categories)
                 if not topic_data:
                     continue
-                topic_order, topic_name = topic_data
+                relevance_score, topic_name = topic_data
                 articles.append(
                     {
                         "region": region,
@@ -171,13 +219,14 @@ def fetch_articles(sources: list[dict], max_per_source: int, region: str) -> lis
                         "summary": cleaned_summary,
                         "published": entry.get("published", ""),
                         "topic": topic_name,
-                        "topic_order": topic_order,
+                        "topic_order": TOPIC_PRIORITY[topic_name],
+                        "score": relevance_score,
                     }
                 )
         except Exception as exc:  # noqa: BLE001
             print(f"[WARN] Could not fetch {source['name']}: {exc}")
 
-    articles.sort(key=lambda article: (article["topic_order"], article["source"]))
+    articles.sort(key=lambda article: (article["topic_order"], -article["score"], article["source"]))
     return _apply_topic_limits(articles)
 
 
@@ -211,6 +260,9 @@ _HTML_TEMPLATE = """\
     .card h2 a:hover {{ text-decoration: underline; }}
     .card p  {{ margin: 0; font-size: 13px; color: #555; line-height: 1.5; }}
     .card .meta {{ font-size: 11px; color: #999; margin-top: 6px; }}
+    .read-link {{ margin-top: 8px; font-size: 12px; }}
+    .read-link a {{ color: #1a73e8; font-weight: bold; text-decoration: none; }}
+    .read-link a:hover {{ text-decoration: underline; }}
     .ftr {{ text-align: center; font-size: 11px; color: #aaa; padding: 14px; }}
   </style>
 </head>
@@ -257,6 +309,7 @@ def _render_html(articles: list[dict]) -> str:
             f'  <h2><a href="{art["link"]}" target="_blank">{art["title"]}</a></h2>'
             f'  <p>{art["summary"]}</p>'
             f'  <div class="meta">{art["published"]}</div>'
+            f'  <div class="read-link"><a href="{art["link"]}" target="_blank">Leer noticia</a></div>'
             f"</div>"
         )
 
@@ -289,7 +342,7 @@ def _render_plain(articles: list[dict]) -> str:
         lines.append(f"\n• ({TOPIC_LABELS[art['topic']]}) {art['title']}")
         if art["summary"]:
             lines.append(f"  {art['summary']}")
-        lines.append(f"  {art['link']}")
+        lines.append(f"  Leer noticia: {art['link']}")
     return "\n".join(lines)
 
 
@@ -331,7 +384,7 @@ def main() -> None:
     articles = costa_rica_articles + world_articles
     print(
         "📰 "
-        f"{len(articles)} artículos obtenidos tras filtrar por Tecnología, Ciencia y Política "
+        f"{len(articles)} artículos obtenidos tras clasificar por Tecnología, Ciencia y Política "
         f"(límites por región: Tecnología={MAX_PER_TOPIC['tecnologia']}, "
         f"Ciencia={MAX_PER_TOPIC['ciencia']}, Política={MAX_PER_TOPIC['politica']})."
     )
