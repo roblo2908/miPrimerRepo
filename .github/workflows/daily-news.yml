@@ -2,8 +2,8 @@ name: Daily News Digest
 
 on:
   schedule:
-    # Runs every day at 08:00 UTC (adjust to your timezone)
-    - cron: "0 8 * * *"
+    # Costa Rica is UTC-6 year-round, so 06:30 in Costa Rica = 12:30 UTC
+    - cron: "30 12 * * *"
   workflow_dispatch: # Allow manual runs from the Actions tab
 
 jobs:
@@ -32,6 +32,10 @@ jobs:
           EMAIL_RECIPIENT: ${{ secrets.EMAIL_RECIPIENT }}
           # Optional – change to "en" for English sources
           NEWS_LANGUAGE:   ${{ vars.NEWS_LANGUAGE || 'es' }}
-          # Optional – articles per source (default 5)
-          MAX_ARTICLES:    ${{ vars.MAX_ARTICLES || '5' }}
+          # Optional – articles inspected per source before filtering (default 20)
+          MAX_ARTICLES:    ${{ vars.MAX_ARTICLES || '20' }}
+          # Optional – per-topic limits per region
+          MAX_TECHNOLOGY:  ${{ vars.MAX_TECHNOLOGY || '10' }}
+          MAX_SCIENCE:     ${{ vars.MAX_SCIENCE || '6' }}
+          MAX_POLITICS:    ${{ vars.MAX_POLITICS || '4' }}
         run: python scripts/news_agent.py
