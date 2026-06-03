@@ -47,21 +47,42 @@ TOPIC_KEYWORDS = {
         "chips", "semiconductor", "semiconductores", "nube", "cloud", "openai",
         "google", "microsoft", "apple", "meta", "xiaomi", "samsung", "tesla",
         "android", "iphone", "tiktok", "red social", "redes sociales", "plataforma",
+        "computación", "computacion", "algoritmo", "algoritmos", "automatización",
+        "automatizacion", "programación", "programacion", "desarrollador", "desarrollo",
+        "innovación", "innovacion", "electrónico", "electronico", "dispositivo", "dispositivos",
     ],
     "ciencia": [
         "ciencia", "científico", "cientifica", "científicos", "cientificos", "investigación",
         "investigacion", "estudio", "laboratorio", "espacio", "nasa", "salud", "medicina",
         "biología", "biologia", "física", "fisica", "química", "quimica", "genética", "genetica",
         "astronomía", "astronomia", "vacuna", "vacunas", "planeta", "universo", "descubrimiento",
+        "experimento", "cientifica", "cientifico", "científicamente", "investigador", "investigadora",
     ],
     "politica": [
         "política", "politica", "gobierno", "presidente", "presidencia", "asamblea",
         "diputado", "diputada", "diputados", "diputadas", "congreso", "elecciones",
         "canciller", "ministro", "ministra", "decreto", "ley", "reforma", "partido",
         "alcalde", "alcaldesa", "municipalidad", "poder ejecutivo", "poder legislativo",
-        "tribunal supremo de elecciones", "tse",
+        "tribunal supremo de elecciones", "tse", "parlamento", "senado", "senador", "senadora",
+        "campaña", "campana", "candidato", "candidata", "oposición", "oposicion",
     ],
 }
+
+TECH_SOURCE_HINTS = [
+    "tecnologia", "tecnologia y ciencia", "technology", "tech", "tecnología y gadgets",
+    "tecnología y innovación", "tecnología e innovación", "innovation", "startups", "ai",
+    "artificial intelligence", "ciencia y tecnologia", "science and technology",
+]
+
+SCIENCE_SOURCE_HINTS = [
+    "ciencia", "science", "salud", "health", "espacio", "space", "investigacion",
+    "investigación", "science and technology", "ciencia y tecnologia",
+]
+
+POLITICS_SOURCE_HINTS = [
+    "politica", "política", "government", "gobierno", "elections", "elecciones",
+    "congreso", "parlamento",
+]
 
 NEWS_SOURCES = {
     "es": {
@@ -69,11 +90,17 @@ NEWS_SOURCES = {
             {"name": "Delfino.cr", "url": "https://delfino.cr/feed"},
             {"name": "Despertar.cr", "url": "https://despertar.opennemas.com/rss/all.xml"},
             {"name": "Diario Extra", "url": "https://www.diarioextra.com/RSS"},
+            {"name": "La Nación", "url": "https://www.nacion.com/arcio/rss/category/tecnologia/"},
+            {"name": "CRHoy", "url": "https://www.crhoy.com/feed/"},
         ],
         "mundo": [
             {"name": "BBC Mundo", "url": "https://feeds.bbci.co.uk/mundo/rss.xml"},
             {"name": "El País", "url": "https://feeds.elpais.com/mrss-s/pages/ep/site/elpais.com/portada"},
             {"name": "CNN en Español", "url": "http://cnnespanol.cnn.com/feed/"},
+            {"name": "Xataka", "url": "https://www.xataka.com/feedburner.xml"},
+            {"name": "Hipertextual", "url": "https://hipertextual.com/feed"},
+            {"name": "Muy Interesante", "url": "https://www.muyinteresante.com/feed/rss2/"},
+            {"name": "MIT Technology Review", "url": "https://www.technologyreview.com/feed/"},
         ],
     },
     "en": {
@@ -82,6 +109,12 @@ NEWS_SOURCES = {
             {"name": "BBC News", "url": "http://feeds.bbci.co.uk/news/rss.xml"},
             {"name": "Reuters", "url": "https://feeds.reuters.com/reuters/topNews"},
             {"name": "AP News", "url": "https://rsshub.app/apnews/topics/apf-topnews"},
+            {"name": "TechCrunch", "url": "https://techcrunch.com/feed/"},
+            {"name": "The Verge", "url": "https://www.theverge.com/rss/index.xml"},
+            {"name": "Ars Technica", "url": "https://feeds.arstechnica.com/arstechnica/index"},
+            {"name": "Wired", "url": "https://www.wired.com/feed/rss"},
+            {"name": "MIT Technology Review", "url": "https://www.technologyreview.com/feed/"},
+            {"name": "ScienceDaily", "url": "https://www.sciencedaily.com/rss/top.xml"},
         ],
     },
 }
@@ -152,43 +185,50 @@ def _count_keyword_matches(text: str, keyword: str) -> int:
     return len(re.findall(pattern, normalized_text))
 
 
-def _topic_score(title: str, summary: str, categories: list[str]) -> tuple[int, str] | None:
+def _source_bias(source_name: str, categories: list[str], topic: str) -> int:
+    combined = _normalize(f"{source_name} {' '.join(categories)}")
+    hints_map = {
+        "tecnologia": TECH_SOURCE_HINTS,
+        "ciencia": SCIENCE_SOURCE_HINTS,
+        "politica": POLITICS_SOURCE_HINTS,
+    }
+    score = 0
+    for hint in hints_map[topic]:
+        if _normalize(hint) in combined:
+            score += 12 if topic == "tecnologia" else 8
+    return score
+
+
+def _topic_score(source_name: str, title: str, summary: str, categories: list[str]) -> tuple[int, str] | None:
     title_text = _normalize(title)
     summary_text = _normalize(summary)
     categories_text = _normalize(" ".join(categories))
 
     scores = defaultdict(int)
     for topic in TOPIC_PRIORITY:
+        title_weight = 9 if topic == "tecnologia" else 5
+        summary_weight = 4 if topic == "tecnologia" else 2
+        category_weight = 10 if topic == "tecnologia" else 6
         for keyword in TOPIC_KEYWORDS[topic]:
-            title_weight = 7 if topic == "tecnologia" else 5
-            summary_weight = 3 if topic == "tecnologia" else 2
-            category_weight = 8 if topic == "tecnologia" else 6
             scores[topic] += _count_keyword_matches(title_text, keyword) * title_weight
             scores[topic] += _count_keyword_matches(summary_text, keyword) * summary_weight
             scores[topic] += _count_keyword_matches(categories_text, keyword) * category_weight
+        scores[topic] += _source_bias(source_name, categories, topic)
 
     if scores["tecnologia"] > 0 and scores["tecnologia"] >= scores["ciencia"]:
         return scores["tecnologia"], "tecnologia"
 
-    best_topic = None
-    best_score = 0
-    for topic in TOPIC_PRIORITY:
-        score = scores[topic]
-        if score > best_score:
-            best_topic = topic
-            best_score = score
-        elif score == best_score and score > 0 and best_topic is not None:
-            if TOPIC_PRIORITY[topic] < TOPIC_PRIORITY[best_topic]:
-                best_topic = topic
+    if scores["ciencia"] > 0 and scores["ciencia"] >= scores["politica"]:
+        return scores["ciencia"], "ciencia"
 
-    if not best_topic or best_score == 0:
-        return None
-    return best_score, best_topic
+    if scores["politica"] > 0:
+        return scores["politica"], "politica"
+
+    return None
 
 
 def _apply_topic_limits(articles: list[dict]) -> list[dict]:
-    prioritized_topics = ["tecnologia", "ciencia", "politica"]
-    topic_buckets = {topic: [] for topic in prioritized_topics}
+    topic_buckets = {topic: [] for topic in TOPIC_PRIORITY}
     for article in articles:
         topic_buckets[article["topic"]].append(article)
 
@@ -200,9 +240,9 @@ def _apply_topic_limits(articles: list[dict]) -> list[dict]:
     science_articles = topic_buckets["ciencia"][: MAX_PER_TOPIC["ciencia"]]
     limited_articles.extend(science_articles)
 
-    if len(technology_articles) < MAX_PER_TOPIC["tecnologia"]:
-        science_fill_slots = MAX_PER_TOPIC["tecnologia"] - len(technology_articles)
-        extra_science = topic_buckets["ciencia"][MAX_PER_TOPIC["ciencia"] : MAX_PER_TOPIC["ciencia"] + science_fill_slots]
+    remaining_slots = max(0, MAX_PER_TOPIC["tecnologia"] - len(technology_articles))
+    if remaining_slots:
+        extra_science = topic_buckets["ciencia"][MAX_PER_TOPIC["ciencia"] : MAX_PER_TOPIC["ciencia"] + remaining_slots]
         limited_articles.extend(extra_science)
 
     if len(technology_articles) >= max(1, MAX_PER_TOPIC["tecnologia"] // 2):
@@ -227,7 +267,7 @@ def fetch_articles(sources: list[dict], max_per_source: int, region: str) -> lis
                 title = entry.get("title", "(sin título)")
                 cleaned_summary = _truncate(raw_summary)
                 categories = _extract_categories(entry)
-                topic_data = _topic_score(title, cleaned_summary, categories)
+                topic_data = _topic_score(source["name"], title, cleaned_summary, categories)
                 if not topic_data:
                     continue
                 relevance_score, topic_name = topic_data
@@ -405,8 +445,8 @@ def main() -> None:
     articles = costa_rica_articles + world_articles
     print(
         "📰 "
-        f"{len(articles)} artículos obtenidos garantizando prioridad máxima para Tecnología "
-        f"y luego Ciencia (límites por región: Tecnología={MAX_PER_TOPIC['tecnologia']}, "
+        f"{len(articles)} artículos obtenidos con más fuentes locales e internacionales "
+        f"y clasificación reforzada para Tecnología (límites por región: Tecnología={MAX_PER_TOPIC['tecnologia']}, "
         f"Ciencia={MAX_PER_TOPIC['ciencia']}, Política={MAX_PER_TOPIC['politica']})."
     )
 
