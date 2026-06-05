@@ -16,7 +16,7 @@ import os
 import re
 import smtplib
 import textwrap
-from collections import defaultdict
+from collections import Counter, defaultdict
 from datetime import date
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -124,7 +124,7 @@ MAX_ARTICLES = int(os.environ.get("MAX_ARTICLES", "20"))
 MAX_PER_TOPIC = {
     "tecnologia": int(os.environ.get("MAX_TECHNOLOGY", "10")),
     "ciencia": int(os.environ.get("MAX_SCIENCE", "6")),
-    "politica": int(os.environ.get("MAX_POLITICS", "4")),
+    "politica": int(os.environ.get("MAX_POLITICS", "2")),
 }
 EMAIL_SENDER = os.environ["EMAIL_SENDER"]
 EMAIL_PASSWORD = os.environ["EMAIL_PASSWORD"]
@@ -138,7 +138,7 @@ SMTP_PORT = 587
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _truncate(text: str, max_chars: int = 300) -> str:
+def _truncate(text: str, max_chars: int = 220) -> str:
     """Return a clean excerpt of *text* capped at *max_chars* characters."""
     text = (text or "").strip()
     text = re.sub(r"<[^>]+>", "", text)
@@ -161,6 +161,14 @@ def _normalize(text: str) -> str:
     for old, new in replacements.items():
         text = text.replace(old, new)
     return text
+
+
+def _mask_email(email: str) -> str:
+    if "@" not in email:
+        return "***"
+    local, domain = email.split("@", 1)
+    masked_local = local[:2] + "***" if len(local) > 2 else "***"
+    return f"{masked_local}@{domain}"
 
 
 def _extract_categories(entry: dict) -> list[str]:
@@ -217,14 +225,23 @@ def _topic_score(source_name: str, title: str, summary: str, categories: list[st
 
     if scores["tecnologia"] > 0 and scores["tecnologia"] >= scores["ciencia"]:
         return scores["tecnologia"], "tecnologia"
-
     if scores["ciencia"] > 0 and scores["ciencia"] >= scores["politica"]:
         return scores["ciencia"], "ciencia"
-
     if scores["politica"] > 0:
         return scores["politica"], "politica"
-
     return None
+
+
+def _dedupe_articles(articles: list[dict]) -> list[dict]:
+    seen = set()
+    deduped = []
+    for article in articles:
+        key = (_normalize(article["title"]), article["link"])
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(article)
+    return deduped
 
 
 def _apply_topic_limits(articles: list[dict]) -> list[dict]:
@@ -233,22 +250,17 @@ def _apply_topic_limits(articles: list[dict]) -> list[dict]:
         topic_buckets[article["topic"]].append(article)
 
     limited_articles = []
-
     technology_articles = topic_buckets["tecnologia"][: MAX_PER_TOPIC["tecnologia"]]
-    limited_articles.extend(technology_articles)
-
     science_articles = topic_buckets["ciencia"][: MAX_PER_TOPIC["ciencia"]]
+    politics_articles = topic_buckets["politica"][: MAX_PER_TOPIC["politica"]]
+
+    limited_articles.extend(technology_articles)
     limited_articles.extend(science_articles)
 
-    remaining_slots = max(0, MAX_PER_TOPIC["tecnologia"] - len(technology_articles))
-    if remaining_slots:
-        extra_science = topic_buckets["ciencia"][MAX_PER_TOPIC["ciencia"] : MAX_PER_TOPIC["ciencia"] + remaining_slots]
-        limited_articles.extend(extra_science)
-
     if len(technology_articles) >= max(1, MAX_PER_TOPIC["tecnologia"] // 2):
-        limited_articles.extend(topic_buckets["politica"][: MAX_PER_TOPIC["politica"]])
+        limited_articles.extend(politics_articles)
 
-    return limited_articles
+    return _dedupe_articles(limited_articles)
 
 
 def fetch_articles(sources: list[dict], max_per_source: int, region: str) -> list[dict]:
@@ -258,6 +270,7 @@ def fetch_articles(sources: list[dict], max_per_source: int, region: str) -> lis
         try:
             feed = feedparser.parse(source["url"])
             entries = feed.entries[:max_per_source]
+            print(f"[INFO] Fuente '{source['name']}' devolvió {len(entries)} entradas en {region}.")
             for entry in entries:
                 raw_summary = (
                     entry.get("summary")
@@ -301,109 +314,82 @@ _HTML_TEMPLATE = """\
 <head>
   <meta charset="UTF-8" />
   <style>
-    body  {{ font-family: Arial, sans-serif; background: #f4f4f4; color: #333; margin: 0; padding: 0; }}
-    .wrap {{ max-width: 680px; margin: 24px auto; background: #fff; border-radius: 8px;
-             overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,.12); }}
-    .hdr  {{ background: #1a73e8; color: #fff; padding: 20px 28px; }}
-    .hdr h1 {{ margin: 0; font-size: 22px; }}
-    .hdr p  {{ margin: 4px 0 0; font-size: 13px; opacity: .85; }}
-    .body {{ padding: 20px 28px; }}
-    .section {{ margin: 20px 0 10px; font-size: 18px; font-weight: bold; color: #202124; }}
-    .src  {{ margin: 20px 0 8px; font-size: 13px; font-weight: bold; color: #1a73e8;
-             text-transform: uppercase; letter-spacing: .5px; }}
-    .topic {{ display: inline-block; margin-bottom: 6px; font-size: 11px; font-weight: bold;
-              color: #0b57d0; background: #e8f0fe; border-radius: 999px; padding: 4px 8px;
-              text-transform: uppercase; }}
-    .card {{ border-left: 3px solid #1a73e8; padding: 10px 14px; margin-bottom: 14px;
-             background: #f8f9fa; border-radius: 0 4px 4px 0; }}
-    .card h2 {{ margin: 0 0 6px; font-size: 15px; }}
-    .card h2 a {{ color: #1a1a1a; text-decoration: none; }}
-    .card h2 a:hover {{ text-decoration: underline; }}
-    .card p  {{ margin: 0; font-size: 13px; color: #555; line-height: 1.5; }}
-    .card .meta {{ font-size: 11px; color: #999; margin-top: 6px; }}
-    .read-link {{ margin-top: 8px; font-size: 12px; }}
-    .read-link a {{ color: #1a73e8; font-weight: bold; text-decoration: none; }}
-    .read-link a:hover {{ text-decoration: underline; }}
-    .ftr {{ text-align: center; font-size: 11px; color: #aaa; padding: 14px; }}
+    body {{ font-family: Arial, sans-serif; color: #222; margin: 0; padding: 24px; background: #ffffff; }}
+    .wrap {{ max-width: 700px; margin: 0 auto; }}
+    h1 {{ font-size: 22px; margin-bottom: 4px; }}
+    .intro {{ color: #555; font-size: 14px; margin-bottom: 20px; }}
+    .section {{ margin-top: 24px; font-size: 18px; font-weight: bold; }}
+    .article {{ margin: 14px 0; padding-bottom: 14px; border-bottom: 1px solid #e5e5e5; }}
+    .article-title {{ font-size: 15px; font-weight: bold; margin-bottom: 4px; }}
+    .article-meta {{ font-size: 12px; color: #666; margin-bottom: 4px; }}
+    .article-summary {{ font-size: 13px; color: #333; margin: 6px 0; }}
+    .article-link a {{ color: #0b57d0; text-decoration: none; }}
+    .footer {{ margin-top: 24px; font-size: 12px; color: #777; }}
   </style>
 </head>
 <body>
-<div class="wrap">
-  <div class="hdr">
-    <h1>📰 Resumen de Noticias</h1>
-    <p>{date}</p>
-  </div>
-  <div class="body">
+  <div class="wrap">
+    <h1>Noticias de tecnología y ciencia</h1>
+    <div class="intro">Resumen automático con foco principal en tecnología, seguido de ciencia y algunas noticias de política cuando son relevantes.</div>
     {content}
+    <div class="footer">Enviado automáticamente por GitHub Actions.</div>
   </div>
-  <div class="ftr">Generado automáticamente por tu agente de noticias · GitHub Actions</div>
-</div>
 </body>
 </html>
 """
 
 
 def _render_html(articles: list[dict]) -> str:
-    """Build the full HTML body from a list of article dicts."""
     if not articles:
-        return "<p>No se encontraron noticias hoy en las categorías seleccionadas.</p>"
+        return "<p>No se encontraron noticias relevantes hoy.</p>"
 
-    blocks: list[str] = []
+    blocks = []
     current_region = None
-    current_source = None
     region_titles = {
         "costa_rica": "Costa Rica",
-        "mundo": "Resto del mundo",
+        "mundo": "Internacionales",
     }
 
     for art in articles:
         if art["region"] != current_region:
             current_region = art["region"]
-            current_source = None
             blocks.append(f'<div class="section">{region_titles.get(current_region, current_region)}</div>')
-        if art["source"] != current_source:
-            current_source = art["source"]
-            blocks.append(f'<div class="src">{current_source}</div>')
         blocks.append(
-            f'<div class="card">'
-            f'  <div class="topic">{TOPIC_LABELS[art["topic"]]}</div>'
-            f'  <h2><a href="{art["link"]}" target="_blank">{art["title"]}</a></h2>'
-            f'  <p>{art["summary"]}</p>'
-            f'  <div class="meta">{art["published"]}</div>'
-            f'  <div class="read-link"><a href="{art["link"]}" target="_blank">Leer noticia</a></div>'
-            f"</div>"
+            f'<div class="article">'
+            f'  <div class="article-title">[{TOPIC_LABELS[art["topic"]]}] {art["title"]}</div>'
+            f'  <div class="article-meta">{art["source"]} · {art["published"]}</div>'
+            f'  <div class="article-summary">{art["summary"]}</div>'
+            f'  <div class="article-link"><a href="{art["link"]}" target="_blank">Ver noticia</a></div>'
+            f'</div>'
         )
 
-    content = "\n".join(blocks)
-    today = date.today().strftime("%A, %d de %B de %Y")
-    return _HTML_TEMPLATE.format(lang=LANGUAGE, date=today, content=content)
+    return _HTML_TEMPLATE.format(lang=LANGUAGE, content="\n".join(blocks))
 
 
 def _render_plain(articles: list[dict]) -> str:
-    """Build a plain-text fallback body."""
     if not articles:
-        return "No se encontraron noticias hoy en las categorías seleccionadas."
+        return "No se encontraron noticias relevantes hoy."
 
-    lines = [f"Resumen de Noticias – {date.today()}\n{'=' * 40}"]
+    lines = [
+        f"Noticias de tecnología y ciencia – {date.today()}",
+        "Resumen automático con foco principal en tecnología.",
+        "=" * 50,
+    ]
     current_region = None
-    current_source = None
     region_titles = {
         "costa_rica": "Costa Rica",
-        "mundo": "Resto del mundo",
+        "mundo": "Internacionales",
     }
 
     for art in articles:
         if art["region"] != current_region:
             current_region = art["region"]
-            current_source = None
             lines.append(f"\n\n## {region_titles.get(current_region, current_region)}")
-        if art["source"] != current_source:
-            current_source = art["source"]
-            lines.append(f"\n[{current_source}]")
-        lines.append(f"\n• ({TOPIC_LABELS[art['topic']]}) {art['title']}")
+        lines.append(f"\n- [{TOPIC_LABELS[art['topic']]}] {art['title']}")
+        lines.append(f"  Fuente: {art['source']}")
         if art["summary"]:
             lines.append(f"  {art['summary']}")
-        lines.append(f"  Leer noticia: {art['link']}")
+        lines.append(f"  {art['link']}")
     return "\n".join(lines)
 
 
@@ -411,9 +397,9 @@ def _render_plain(articles: list[dict]) -> str:
 # Email sending
 # ---------------------------------------------------------------------------
 
-def send_email(html_body: str, plain_body: str) -> None:
+def send_email(html_body: str, plain_body: str, article_count: int) -> None:
     today = date.today().strftime("%d/%m/%Y")
-    subject = f"📰 Resumen de Noticias – {today}"
+    subject = f"Noticias de tecnología y ciencia – {today}"
 
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
@@ -422,13 +408,21 @@ def send_email(html_body: str, plain_body: str) -> None:
     msg.attach(MIMEText(plain_body, "plain", "utf-8"))
     msg.attach(MIMEText(html_body, "html", "utf-8"))
 
-    with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
+    print(f"[INFO] Preparando envío SMTP desde {_mask_email(EMAIL_SENDER)} hacia {_mask_email(EMAIL_RECIPIENT)}.")
+    print(f"[INFO] Asunto: {subject}")
+    print(f"[INFO] Artículos en correo: {article_count}")
+
+    with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=30) as server:
         server.ehlo()
         server.starttls()
+        server.ehlo()
         server.login(EMAIL_SENDER, EMAIL_PASSWORD)
-        server.sendmail(EMAIL_SENDER, EMAIL_RECIPIENT, msg.as_string())
+        send_result = server.sendmail(EMAIL_SENDER, [EMAIL_RECIPIENT], msg.as_string())
 
-    print(f"✅ Email enviado a {EMAIL_RECIPIENT}")
+    if send_result:
+        raise RuntimeError(f"SMTP no aceptó todos los destinatarios: {send_result}")
+
+    print(f"✅ Gmail aceptó el correo para {_mask_email(EMAIL_RECIPIENT)}")
 
 
 # ---------------------------------------------------------------------------
@@ -442,17 +436,20 @@ def main() -> None:
     costa_rica_articles = fetch_articles(language_sources.get("costa_rica", []), MAX_ARTICLES, "costa_rica")
     world_articles = fetch_articles(language_sources.get("mundo", []), MAX_ARTICLES, "mundo")
 
-    articles = costa_rica_articles + world_articles
-    print(
-        "📰 "
-        f"{len(articles)} artículos obtenidos con más fuentes locales e internacionales "
-        f"y clasificación reforzada para Tecnología (límites por región: Tecnología={MAX_PER_TOPIC['tecnologia']}, "
-        f"Ciencia={MAX_PER_TOPIC['ciencia']}, Política={MAX_PER_TOPIC['politica']})."
-    )
+    articles = _dedupe_articles(costa_rica_articles + world_articles)
+    topic_counts = Counter(article["topic"] for article in articles)
+    region_counts = Counter(article["region"] for article in articles)
+
+    print(f"[INFO] Artículos finales: {len(articles)}")
+    print(f"[INFO] Por región: {dict(region_counts)}")
+    print(f"[INFO] Por tema: {dict(topic_counts)}")
+
+    if not articles:
+        raise RuntimeError("No se obtuvieron noticias para enviar. Revisa feeds, filtros o clasificación.")
 
     html_body = _render_html(articles)
     plain_body = _render_plain(articles)
-    send_email(html_body, plain_body)
+    send_email(html_body, plain_body, len(articles))
 
 
 if __name__ == "__main__":
