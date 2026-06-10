@@ -16,8 +16,9 @@ import os
 import re
 import smtplib
 import textwrap
+from calendar import timegm
 from collections import Counter, defaultdict
-from datetime import date
+from datetime import date, datetime, timezone
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
@@ -193,6 +194,21 @@ def _count_keyword_matches(text: str, keyword: str) -> int:
     return len(re.findall(pattern, normalized_text))
 
 
+def _entry_date(entry: dict) -> date | None:
+    for key in ("published_parsed", "updated_parsed"):
+        parsed = entry.get(key)
+        if parsed:
+            return datetime.fromtimestamp(timegm(parsed), tz=timezone.utc).date()
+    return None
+
+
+def _is_today_entry(entry: dict) -> bool:
+    published_date = _entry_date(entry)
+    if published_date is None:
+        return False
+    return published_date == datetime.now(timezone.utc).date()
+
+
 def _source_bias(source_name: str, categories: list[str], topic: str) -> int:
     combined = _normalize(f"{source_name} {' '.join(categories)}")
     hints_map = {
@@ -272,6 +288,8 @@ def fetch_articles(sources: list[dict], max_per_source: int, region: str) -> lis
             entries = feed.entries[:max_per_source]
             print(f"[INFO] Fuente '{source['name']}' devolvió {len(entries)} entradas en {region}.")
             for entry in entries:
+                if not _is_today_entry(entry):
+                    continue
                 raw_summary = (
                     entry.get("summary")
                     or entry.get("description")
