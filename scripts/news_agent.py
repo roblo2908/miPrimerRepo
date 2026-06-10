@@ -135,7 +135,6 @@ EMAIL_RECIPIENT = os.environ["EMAIL_RECIPIENT"]
 SMTP_HOST = "smtp.gmail.com"
 SMTP_PORT = 587
 LOCAL_TIMEZONE = ZoneInfo("America/Costa_Rica")
-TARGET_NEWS_DATE = datetime.now(LOCAL_TIMEZONE).date()
 
 
 # ---------------------------------------------------------------------------
@@ -173,6 +172,10 @@ def _mask_email(email: str) -> str:
     local, domain = email.split("@", 1)
     masked_local = local[:2] + "***" if len(local) > 2 else "***"
     return f"{masked_local}@{domain}"
+
+
+def _target_news_date() -> date:
+    return datetime.now(LOCAL_TIMEZONE).date()
 
 
 def _entry_publication_date(entry: dict) -> date | None:
@@ -278,6 +281,7 @@ def _apply_topic_limits(articles: list[dict]) -> list[dict]:
 def fetch_articles(sources: list[dict], max_per_source: int, region: str) -> list[dict]:
     """Fetch, classify, and prioritize articles from a list of RSS feed sources."""
     articles = []
+    target_news_date = _target_news_date()
     for source in sources:
         try:
             feed = feedparser.parse(source["url"])
@@ -285,7 +289,7 @@ def fetch_articles(sources: list[dict], max_per_source: int, region: str) -> lis
             print(f"[INFO] Fuente '{source['name']}' devolvió {len(entries)} entradas en {region}.")
             for entry in entries:
                 publication_date = _entry_publication_date(entry)
-                if publication_date != TARGET_NEWS_DATE:
+                if publication_date != target_news_date:
                     continue
                 raw_summary = (
                     entry.get("summary")
@@ -386,7 +390,7 @@ def _render_plain(articles: list[dict]) -> str:
         return "No se encontraron noticias relevantes hoy."
 
     lines = [
-        f"Noticias de tecnología y ciencia – {TARGET_NEWS_DATE}",
+        f"Noticias de tecnología y ciencia – {_target_news_date()}",
         "Resumen automático con foco principal en tecnología.",
         "=" * 50,
     ]
@@ -413,7 +417,7 @@ def _render_plain(articles: list[dict]) -> str:
 # ---------------------------------------------------------------------------
 
 def send_email(html_body: str, plain_body: str, article_count: int) -> None:
-    today = TARGET_NEWS_DATE.strftime("%d/%m/%Y")
+    today = _target_news_date().strftime("%d/%m/%Y")
     subject = f"Noticias de tecnología y ciencia – {today}"
 
     msg = MIMEMultipart("alternative")
