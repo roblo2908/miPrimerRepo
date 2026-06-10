@@ -195,7 +195,7 @@ def _count_keyword_matches(text: str, keyword: str) -> int:
 
 
 def _entry_date(entry: dict) -> date | None:
-    """Extract UTC date from published/updated metadata in an RSS entry."""
+    """Extract UTC date from RSS metadata, preferring published over updated."""
     for key in ("published_parsed", "updated_parsed"):
         parsed = entry.get(key)
         if parsed:
