@@ -195,6 +195,7 @@ def _count_keyword_matches(text: str, keyword: str) -> int:
 
 
 def _entry_date(entry: dict) -> date | None:
+    """Extract UTC date from published/updated metadata in an RSS entry."""
     for key in ("published_parsed", "updated_parsed"):
         parsed = entry.get(key)
         if parsed:
@@ -203,6 +204,7 @@ def _entry_date(entry: dict) -> date | None:
 
 
 def _is_today_entry(entry: dict) -> bool:
+    """Return True when an RSS entry has metadata dated today in UTC."""
     published_date = _entry_date(entry)
     if published_date is None:
         return False
